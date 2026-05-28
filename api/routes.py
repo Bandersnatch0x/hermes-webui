@@ -3971,6 +3971,51 @@ def handle_get(handler, parsed) -> bool:
             bad(handler, str(exc), status=400)
         return True
 
+    # ── Provider Registry (GET) ──
+    if parsed.path.startswith("/api/providers/registry"):
+        from api.provider_registry.routes import (
+            handle_registry_list,
+            handle_registry_get_one,
+            handle_registry_models_get,
+            handle_registry_usage_get,
+        )
+        if parsed.path == "/api/providers/registry":
+            try:
+                return j(handler, handle_registry_list())
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        # Check sub-resource patterns before single-provider
+        if parsed.path.endswith("/models"):
+            try:
+                result = handle_registry_models_get(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        if parsed.path.endswith("/usage"):
+            try:
+                result = handle_registry_usage_get(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        # Single provider GET
+        try:
+            result = handle_registry_get_one(parsed.path)
+            if result is None:
+                return bad(handler, "Not found", status=404)
+            return j(handler, result)
+        except ValueError as exc:
+            return bad(handler, str(exc), status=404)
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
+
     # ── Providers (GET) ──
     if parsed.path == "/api/providers":
         return j(handler, get_providers())
@@ -5184,6 +5229,61 @@ def handle_post(handler, parsed) -> bool:
             except ValueError as exc:
                 return bad(handler, str(exc), status=400)
         return bad(handler, f"unknown scope: {scope}", status=400)
+
+    # ── Provider Registry (POST) ──
+    if parsed.path.startswith("/api/providers/registry"):
+        from api.provider_registry.routes import (
+            handle_registry_create,
+            handle_registry_models_refresh,
+            handle_registry_usage_refresh,
+            handle_registry_activate,
+        )
+        if parsed.path == "/api/providers/registry":
+            try:
+                result = handle_registry_create(body)
+                return j(handler, result, status=201)
+            except ValueError as exc:
+                return bad(handler, str(exc))
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        if "/models/refresh" in parsed.path:
+            try:
+                result = handle_registry_models_refresh(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        if "/usage/refresh" in parsed.path:
+            try:
+                result = handle_registry_usage_refresh(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        if "/activate" in parsed.path:
+            try:
+                result = handle_registry_activate(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        return bad(handler, "Unknown registry endpoint", status=404)
+
+    if parsed.path == "/api/providers/reconcile":
+        from api.provider_registry.routes import handle_reconcile
+        try:
+            return j(handler, handle_reconcile())
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
 
     # ── Providers (POST) ──
     if parsed.path == "/api/providers":
@@ -6714,6 +6814,17 @@ def handle_patch(handler, parsed) -> bool:
         if result is False:
             return _kanban_unknown_endpoint(handler, parsed, "PATCH")
         return True
+    if parsed.path.startswith("/api/providers/registry/"):
+        from api.provider_registry.routes import handle_registry_update
+        try:
+            result = handle_registry_update(parsed.path, body)
+            if result is None:
+                return bad(handler, "Not found", status=404)
+            return j(handler, result)
+        except ValueError as exc:
+            return bad(handler, str(exc))
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
     return False
 
 
@@ -6732,6 +6843,32 @@ def handle_delete(handler, parsed) -> bool:
         if result is False:
             return _kanban_unknown_endpoint(handler, parsed, "DELETE")
         return True
+    if parsed.path.startswith("/api/providers/registry/"):
+        from api.provider_registry.routes import (
+            handle_registry_delete,
+            handle_registry_credential_delete,
+        )
+        # Credential delete is /api/providers/registry/:id/credential
+        if parsed.path.endswith("/credential"):
+            try:
+                result = handle_registry_credential_delete(parsed.path)
+                if result is None:
+                    return bad(handler, "Not found", status=404)
+                return j(handler, result)
+            except ValueError as exc:
+                return bad(handler, str(exc), status=404)
+            except Exception as exc:
+                return bad(handler, str(exc), status=500)
+        # Provider delete
+        try:
+            result = handle_registry_delete(parsed.path)
+            if result is None:
+                return bad(handler, "Not found", status=404)
+            return j(handler, result)
+        except ValueError as exc:
+            return bad(handler, str(exc))
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
     return False
 
 
@@ -6743,6 +6880,17 @@ def handle_put(handler, parsed) -> bool:
     if parsed.path.startswith("/api/mcp/servers/"):
         name = parsed.path[len("/api/mcp/servers/"):]
         return _handle_mcp_server_update(handler, name, body)
+    if parsed.path.startswith("/api/providers/registry/"):
+        from api.provider_registry.routes import handle_registry_credential_put
+        try:
+            result = handle_registry_credential_put(parsed.path, body)
+            if result is None:
+                return bad(handler, "Not found", status=404)
+            return j(handler, result)
+        except ValueError as exc:
+            return bad(handler, str(exc))
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
     return False
 
 # ── GET route helpers ─────────────────────────────────────────────────────────

@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Provider Registry** — SQLite-backed provider management with official + custom provider unification. Bootstraps official providers (openai, anthropic, etc.) and imports legacy `custom_providers[]` from config.yaml on first run. Supports OpenAI (`completions`/`messages`/`responses`) and Anthropic adapters, per-provider credential storage (base64 encryption, phase 1), model cache refresh, usage probing (native adapter + custom endpoint), and optimistic concurrency on updates. All registry operations exposed via `/api/providers/registry` routes with full backward-compatible legacy `/api/providers` bridge. Profile-scoped `providers.db` per Hermes profile. 202 new tests covering DB schema, service CRUD, projection, credentials, routes, adapters, and UI structure.
+
 ## [v0.51.145] — 2026-05-26 — Release DQ (stage-batch27 — sidebar running-state preservation)
 
 ### Fixed
