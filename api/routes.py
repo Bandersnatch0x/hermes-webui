@@ -5337,6 +5337,90 @@ def handle_post(handler, parsed) -> bool:
         except Exception as exc:
             return bad(handler, str(exc), status=500)
 
+    # ── Legacy custom provider create (POST) ──
+    if parsed.path == "/api/providers/custom":
+        from api.config import _custom_provider_slug_from_name, _get_config_path
+        from api.config import _load_yaml_config_file, _save_yaml_config_file
+        from api.provider_registry.routes import handle_registry_create
+        from api.provider_registry.services import set_credential as _set_cp_cred
+        display_name = (body.get("display_name") or "").strip()
+        adapter_type = (body.get("adapter_type") or "openai").strip().lower()
+        if not display_name:
+            return bad(handler, "display_name is required")
+        if adapter_type not in ("openai", "anthropic"):
+            adapter_type = "openai"
+        provider_key = _custom_provider_slug_from_name(display_name)
+        if not provider_key:
+            return bad(handler, "Could not derive provider key from display_name")
+        base_url = (body.get("base_url") or "").strip() or None
+        api_key = (body.get("api_key") or "").strip() or None
+        default_model = body.get("default_model") or None
+        response_format = body.get("response_format") or None
+        models_endpoint = body.get("models_endpoint") or None
+        usage_strategy = (body.get("usage_strategy") or "none").strip()
+        usage_endpoint_url = body.get("usage_endpoint_url") or None
+        usage_parser_type = body.get("usage_parser_type") or None
+        # Write to config.yaml (SSOT for get_providers())
+        try:
+            config_path = _get_config_path()
+            config_data = _load_yaml_config_file(config_path)
+            custom_list = config_data.get("custom_providers", [])
+            if not isinstance(custom_list, list):
+                custom_list = []
+            entry = {
+                "name": display_name,
+                "provider": provider_key,
+                "adapter_type": adapter_type,
+                "base_url": base_url,
+            }
+            if api_key:
+                entry["api_key"] = api_key
+            if default_model:
+                entry["default_model"] = default_model
+            if response_format:
+                entry["response_format"] = response_format
+            if models_endpoint:
+                entry["models_endpoint"] = models_endpoint
+            if usage_strategy and usage_strategy != "none":
+                entry["usage_strategy"] = usage_strategy
+            if usage_endpoint_url:
+                entry["usage_endpoint_url"] = usage_endpoint_url
+            if usage_parser_type:
+                entry["usage_parser_type"] = usage_parser_type
+            custom_list.append(entry)
+            config_data["custom_providers"] = custom_list
+            _save_yaml_config_file(config_path, config_data)
+            # Invalidate config cache so get_providers() picks up changes
+            from api.config import reload_config
+            reload_config()
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
+        # Also sync to registry
+        registry_payload = {
+            "kind": "custom",
+            "provider_key": provider_key,
+            "display_name": display_name,
+            "adapter_type": adapter_type,
+            "base_url": base_url,
+            "enabled": body.get("enabled", True),
+            "default_model": default_model,
+            "usage_strategy": usage_strategy,
+            "response_format": response_format,
+            "models_endpoint": models_endpoint,
+            "usage_endpoint_url": usage_endpoint_url,
+            "usage_parser_type": usage_parser_type,
+        }
+        try:
+            result = handle_registry_create(registry_payload)
+        except Exception:
+            result = {}  # non-fatal; config.yaml is the SSOT
+        if api_key and result.get("id"):
+            try:
+                _set_cp_cred(result["id"], api_key)
+            except Exception:
+                pass
+        return j(handler, {"ok": True, "provider": provider_key})
+
     # ── Providers (POST) ──
     if parsed.path == "/api/providers":
         provider_id = (body.get("provider") or "").strip().lower()
@@ -6146,6 +6230,34 @@ def handle_post(handler, parsed) -> bool:
         except RuntimeError as e:
             return bad(handler, str(e), 409)
 
+    if parsed.path == "/api/profile/update":
+        name = body.get("name", "").strip()
+        if not name:
+            return bad(handler, "name is required")
+        try:
+            from api.profiles import update_profile_api, _validate_profile_name
+
+            if name != "default":
+                _validate_profile_name(name)
+            result = update_profile_api(
+                name,
+                new_name=body.get("new_name"),
+                description=body.get("description"),
+                base_url=body.get("base_url"),
+                api_key=body.get("api_key"),
+                default_model=body.get("default_model"),
+                model_provider=body.get("model_provider"),
+                default_workspace=body.get("default_workspace"),
+            )
+            # Invalidate model cache so next /api/models reflects config changes
+            from api.config import invalidate_models_cache
+            invalidate_models_cache()
+            return j(handler, {"ok": True, "profile": result})
+        except (ValueError, FileNotFoundError) as e:
+            return bad(handler, _sanitize_error(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), 409)
+
     # ── Settings (POST) ──
     if parsed.path == "/api/settings":
         from api.auth import (
@@ -6943,6 +7055,123 @@ def handle_put(handler, parsed) -> bool:
             return bad(handler, str(exc))
         except Exception as exc:
             return bad(handler, str(exc), status=500)
+
+    # ── Legacy custom provider update (PUT /api/providers/custom/:provider_key) ──
+    import urllib.parse
+    if parsed.path.startswith("/api/providers/custom/"):
+        from api.provider_registry.store import get_provider_by_key as _cp_get_by_key
+        from api.provider_registry.services import update_provider as _cp_update, set_credential as _cp_set_cred
+        from api.config import _custom_provider_slug_from_name, _get_config_path
+        from api.config import _load_yaml_config_file, _save_yaml_config_file
+        provider_key = urllib.parse.unquote(parsed.path[len("/api/providers/custom/"):])
+        display_name = (body.get("display_name") or "").strip()
+        base_url = (body.get("base_url") or "").strip() or None
+        api_key = (body.get("api_key") or "").strip() or None
+        default_model = body.get("default_model") or None
+        adapter_type = (body.get("adapter_type") or "").strip().lower() or None
+        response_format = body.get("response_format") or None
+        models_endpoint = body.get("models_endpoint") or None
+        usage_strategy = (body.get("usage_strategy") or "").strip() or None
+        usage_endpoint_url = body.get("usage_endpoint_url") or None
+        usage_parser_type = body.get("usage_parser_type") or None
+        # Write to config.yaml (SSOT for get_providers())
+        try:
+            config_path = _get_config_path()
+            config_data = _load_yaml_config_file(config_path)
+            custom_list = config_data.get("custom_providers", [])
+            if not isinstance(custom_list, list):
+                custom_list = []
+            # Find matching entry by provider (slug) and update
+            replaced = False
+            for i, entry in enumerate(custom_list):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("provider") == provider_key or entry.get("name") == display_name or entry.get("provider") == _custom_provider_slug_from_name(entry.get("name", "")):
+                    custom_list[i] = {
+                        "name": display_name,
+                        "provider": provider_key,
+                        "adapter_type": adapter_type or "openai",
+                        "base_url": base_url,
+                    }
+                    if api_key:
+                        custom_list[i]["api_key"] = api_key
+                    if default_model:
+                        custom_list[i]["default_model"] = default_model
+                    if response_format:
+                        custom_list[i]["response_format"] = response_format
+                    if models_endpoint:
+                        custom_list[i]["models_endpoint"] = models_endpoint
+                    if usage_strategy and usage_strategy != "none":
+                        custom_list[i]["usage_strategy"] = usage_strategy
+                    if usage_endpoint_url:
+                        custom_list[i]["usage_endpoint_url"] = usage_endpoint_url
+                    if usage_parser_type:
+                        custom_list[i]["usage_parser_type"] = usage_parser_type
+                    replaced = True
+                    break
+            if not replaced and display_name:
+                new_entry = {
+                    "name": display_name,
+                    "provider": provider_key,
+                    "adapter_type": adapter_type or "openai",
+                    "base_url": base_url,
+                }
+                if api_key:
+                    new_entry["api_key"] = api_key
+                if default_model:
+                    new_entry["default_model"] = default_model
+                if response_format:
+                    new_entry["response_format"] = response_format
+                if models_endpoint:
+                    new_entry["models_endpoint"] = models_endpoint
+                if usage_strategy and usage_strategy != "none":
+                    new_entry["usage_strategy"] = usage_strategy
+                if usage_endpoint_url:
+                    new_entry["usage_endpoint_url"] = usage_endpoint_url
+                if usage_parser_type:
+                    new_entry["usage_parser_type"] = usage_parser_type
+                custom_list.append(new_entry)
+            config_data["custom_providers"] = custom_list
+            _save_yaml_config_file(config_path, config_data)
+            from api.config import reload_config
+            reload_config()
+        except Exception as exc:
+            return bad(handler, str(exc), status=500)
+        # Also sync to registry
+        existing = _cp_get_by_key(provider_key)
+        if existing:
+            updates = {}
+            if display_name:
+                updates["display_name"] = display_name
+            if adapter_type:
+                updates["adapter_type"] = adapter_type
+            if base_url is not None:
+                updates["base_url"] = base_url
+            if default_model is not None:
+                updates["default_model"] = default_model
+            if response_format is not None:
+                updates["response_format"] = response_format
+            if models_endpoint is not None:
+                updates["models_endpoint"] = models_endpoint
+            if usage_strategy is not None:
+                updates["usage_strategy"] = usage_strategy
+            if usage_endpoint_url is not None:
+                updates["usage_endpoint_url"] = usage_endpoint_url
+            if usage_parser_type is not None:
+                updates["usage_parser_type"] = usage_parser_type
+            if "enabled" in body:
+                updates["enabled"] = bool(body["enabled"])
+            if updates:
+                try:
+                    _cp_update(existing["id"], updates)
+                except Exception:
+                    pass
+            if api_key:
+                try:
+                    _cp_set_cred(existing["id"], api_key)
+                except Exception:
+                    pass
+        return j(handler, {"ok": True, "provider": provider_key})
     return False
 
 # ── GET route helpers ─────────────────────────────────────────────────────────

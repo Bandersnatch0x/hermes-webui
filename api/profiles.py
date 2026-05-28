@@ -997,6 +997,17 @@ def list_profiles_api() -> list:
     active = get_active_profile_name()
     result = []
     for p in infos:
+        # Read base_url from config.yaml (not in Profile dataclass)
+        base_url = None
+        try:
+            import yaml as _yaml
+            cfg_path = Path(p.path) / 'config.yaml'
+            if cfg_path.exists():
+                _cfg = _yaml.safe_load(cfg_path.read_text(encoding='utf-8'))
+                if isinstance(_cfg, dict):
+                    base_url = (_cfg.get('model') or {}).get('base_url')
+        except Exception:
+            pass
         result.append({
             'name': p.name,
             'path': str(p.path),
@@ -1005,14 +1016,26 @@ def list_profiles_api() -> list:
             'gateway_running': p.gateway_running,
             'model': p.model,
             'provider': p.provider,
+            'base_url': base_url,
             'has_env': p.has_env,
             'skill_count': p.skill_count,
+            'description': getattr(p, 'description', None),
         })
     return result
 
 
 def _default_profile_dict() -> dict:
     """Fallback profile dict when hermes_cli is not importable."""
+    base_url = None
+    try:
+        import yaml as _yaml
+        cfg_path = _DEFAULT_HERMES_HOME / 'config.yaml'
+        if cfg_path.exists():
+            _cfg = _yaml.safe_load(cfg_path.read_text(encoding='utf-8'))
+            if isinstance(_cfg, dict):
+                base_url = (_cfg.get('model') or {}).get('base_url')
+    except Exception:
+        pass
     return {
         'name': 'default',
         'path': str(_DEFAULT_HERMES_HOME),
@@ -1021,8 +1044,10 @@ def _default_profile_dict() -> dict:
         'gateway_running': False,
         'model': None,
         'provider': None,
+        'base_url': base_url,
         'has_env': (_DEFAULT_HERMES_HOME / '.env').exists(),
         'skill_count': 0,
+        'description': None,
     }
 
 
@@ -1374,3 +1399,170 @@ def delete_profile_api(name: str) -> dict:
     # Drop cached root-profile-name lookup — list_profiles_api() shape changed.
     _invalidate_root_profile_cache()
     return {'ok': True, 'name': name}
+
+
+def update_profile_api(
+    name: str,
+    *,
+    new_name: Optional[str] = None,
+    description: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    default_model: Optional[str] = None,
+    model_provider: Optional[str] = None,
+    default_workspace: Optional[str] = None,
+) -> dict:
+    """Update an existing profile's metadata and config.yaml fields.
+
+    Supported fields:
+      - new_name   → renames the profile via hermes profile rename
+      - description → sets profile description via hermes profile describe --text
+      - base_url, api_key → written into config.yaml model section
+      - default_model, model_provider → written into config.yaml model section
+      - default_workspace → written into config.yaml root level
+
+    Returns the updated profile dict (from list_profiles_api).
+    Raises ValueError / FileNotFoundError / RuntimeError on failure.
+    """
+    # ── Resolve current profile path ─────────────────────────────────────
+    is_root = _is_root_profile(name)
+    if is_root:
+        profile_dir = _DEFAULT_HERMES_HOME
+    else:
+        _validate_profile_name(name)
+        profile_dir = _resolve_named_profile_home(name)
+
+    if not profile_dir.is_dir():
+        raise FileNotFoundError(f"Profile '{name}' does not exist.")
+
+    # ── Rename (if requested) ────────────────────────────────────────────
+    if new_name is not None:
+        new_name = str(new_name).strip()
+        if not new_name:
+            raise ValueError("new_name must not be empty")
+        if is_root:
+            raise ValueError("Cannot rename the default/root profile.")
+        if new_name != name:
+            if not _PROFILE_ID_RE.fullmatch(new_name):
+                raise ValueError(
+                    f"Invalid profile name {new_name!r}. "
+                    "Must match [a-z0-9][a-z0-9_-]{0,63}"
+                )
+            try:
+                from hermes_cli.profiles import rename_profile
+                rename_profile(name, new_name)
+            except ImportError:
+                # Fallback: mv the directory
+                dest = _profiles_root() / new_name
+                if dest.exists():
+                    raise FileExistsError(f"Profile '{new_name}' already exists.")
+                shutil.move(str(profile_dir), str(dest))
+            _invalidate_root_profile_cache()
+            # Update name for subsequent operations
+            name = new_name
+            if not _is_root_profile(name):
+                profile_dir = _resolve_named_profile_home(name)
+            else:
+                profile_dir = _DEFAULT_HERMES_HOME
+
+    # ── Description (via hermes profile describe --text) ─────────────────
+    if description is not None:
+        try:
+            import subprocess as _subprocess
+            _subprocess.run(
+                ["hermes", "profile", "describe", "--text", description, name],
+                check=True, capture_output=True, timeout=10,
+            )
+        except Exception:
+            logger.debug("Failed to set description for profile %s", name, exc_info=True)
+
+    # ── Config.yaml updates (model + workspace) ──────────────────────────
+    config_path = profile_dir / "config.yaml"
+    need_config_write = any([
+        base_url is not None,
+        api_key is not None,
+        default_model is not None,
+        model_provider is not None,
+        default_workspace is not None,
+    ])
+
+    if need_config_write:
+        try:
+            import yaml as _yaml
+        except ImportError:
+            raise RuntimeError("PyYAML not available — cannot update profile config")
+
+        cfg: dict = {}
+        if config_path.exists():
+            try:
+                loaded = _yaml.safe_load(config_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    cfg = loaded
+            except Exception:
+                logger.debug("Failed to load config from %s", config_path)
+
+        # Model section
+        model_section = cfg.get("model", {})
+        if not isinstance(model_section, dict):
+            model_section = {}
+
+        if base_url is not None:
+            cleaned = _clean_profile_config_value(base_url, "base_url")
+            if cleaned:
+                if not cleaned.startswith(("http://", "https://")):
+                    raise ValueError("base_url must start with http:// or https://")
+                model_section["base_url"] = cleaned
+            else:
+                model_section.pop("base_url", None)
+
+        if api_key is not None:
+            cleaned = _clean_profile_config_value(api_key, "api_key")
+            if cleaned:
+                model_section["api_key"] = cleaned
+            else:
+                model_section.pop("api_key", None)
+
+        if default_model is not None or model_provider is not None:
+            dm, mp = _split_webui_provider_model_value(default_model, model_provider)
+            _validate_profile_model_selection(dm, mp)
+            if dm:
+                model_section["default"] = dm
+            if mp:
+                model_section["provider"] = mp
+
+        cfg["model"] = model_section
+
+        # Default workspace (root-level config key)
+        if default_workspace is not None:
+            cleaned = _clean_profile_config_value(default_workspace, "default_workspace")
+            if cleaned:
+                cfg["default_workspace"] = cleaned
+            else:
+                cfg.pop("default_workspace", None)
+
+        config_path.write_text(
+            _yaml.dump(cfg, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+    # ── Invalidate caches ────────────────────────────────────────────────
+    _invalidate_root_profile_cache()
+
+    # ── Return updated profile dict ──────────────────────────────────────
+    for p in list_profiles_api():
+        if p["name"] == name:
+            return p
+    # Fallback if profile not yet visible in list
+    return {
+        "name": name,
+        "path": str(profile_dir),
+        "is_default": is_root or _is_root_profile(name),
+        "is_active": _active_profile == name,
+        "gateway_running": False,
+        "model": None,
+        "provider": None,
+        "base_url": None,
+        "has_env": (profile_dir / ".env").exists(),
+        "skill_count": 0,
+        "description": None,
+    }

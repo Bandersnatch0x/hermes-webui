@@ -181,6 +181,16 @@ def get_provider(provider_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_provider_by_key(provider_key: str) -> dict[str, Any] | None:
+    """Get a single provider instance by its unique provider_key (e.g. custom:xiaomi-cn)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM provider_instances WHERE provider_key = ? AND deleted_at IS NULL",
+            (provider_key,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def create_provider(data: dict[str, Any]) -> dict[str, Any]:
     """Create a new provider instance. Returns the created row."""
     now = _now()

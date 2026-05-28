@@ -95,6 +95,12 @@ def get_provider(provider_id: str) -> dict[str, Any] | None:
     return store.get_provider(provider_id)
 
 
+def get_provider_by_key(provider_key: str) -> dict[str, Any] | None:
+    """Get a provider by its provider_key (e.g. custom:xiaomi-cn)."""
+    store.init_db()
+    return store.get_provider_by_key(provider_key)
+
+
 def create_provider(data: dict[str, Any]) -> dict[str, Any]:
     """Create a new provider instance."""
     store.init_db()

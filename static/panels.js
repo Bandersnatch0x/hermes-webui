@@ -5111,6 +5111,7 @@ function _renderProfileDetail(p, activeName){
 
 function _setProfileHeaderButtons(mode, p, activeName){
   const actBtn = $('btnActivateProfileDetail');
+  const editBtn = $('btnEditProfileDetail');
   const delBtn = $('btnDeleteProfileDetail');
   const cancelBtn = $('btnCancelProfileDetail');
   const saveBtn = $('btnSaveProfileDetail');
@@ -5120,12 +5121,15 @@ function _setProfileHeaderButtons(mode, p, activeName){
     const isActive = p && p.name === activeName;
     const isDefault = !!(p && p.is_default);
     if (isActive) hide(actBtn); else show(actBtn);
+    show(editBtn); // always show edit for existing profiles
     if (isDefault) hide(delBtn); else show(delBtn);
     hide(cancelBtn); hide(saveBtn);
   } else if (mode === 'create') {
-    hide(actBtn); hide(delBtn); show(cancelBtn); show(saveBtn);
+    hide(actBtn); hide(editBtn); hide(delBtn); show(cancelBtn); show(saveBtn);
+  } else if (mode === 'edit') {
+    hide(actBtn); hide(editBtn); hide(delBtn); show(cancelBtn); show(saveBtn);
   } else {
-    [actBtn, delBtn, cancelBtn, saveBtn].forEach(hide);
+    [actBtn, editBtn, delBtn, cancelBtn, saveBtn].forEach(hide);
   }
 }
 
@@ -5454,9 +5458,10 @@ async function _populateProfileFormModelSelect(){
 }
 
 function cancelProfileForm(){
-  if (_profilePreFormDetail) {
+  if (_profilePreFormDetail && (_profileMode === 'edit' || _profileMode === 'create')) {
     const snap = _profilePreFormDetail;
     _profilePreFormDetail = null;
+    _profileMode = 'read';
     const activeName = _profilesCache ? _profilesCache.active : null;
     _renderProfileDetail(snap, activeName);
     return;
@@ -5507,6 +5512,137 @@ async function saveProfileForm(){
 // Back-compat
 const submitProfileCreate = saveProfileForm;
 function toggleProfileForm(){ openProfileCreate();
+}
+
+// ── Profile Edit ──
+function openProfileEditForm(){
+  if (!_currentProfileDetail) return;
+  if (_currentPanel !== 'profiles') switchPanel('profiles');
+  _profilePreFormDetail = _currentProfileDetail ? { ..._currentProfileDetail } : null;
+  _profileMode = 'edit';
+  _renderProfileEditForm(_currentProfileDetail);
+}
+
+async function _renderProfileEditForm(p){
+  const title = $('profileDetailTitle');
+  const body = $('profileDetailBody');
+  const empty = $('profileDetailEmpty');
+  if (!title || !body) return;
+  title.textContent = t('profile_edit_title') || 'Edit profile';
+  const isDefault = !!(p && p.is_default);
+  const nameHint = isDefault
+    ? (t('profile_edit_name_readonly') || 'Name cannot be changed for the default profile.')
+    : (t('profile_name_rule') || 'Lowercase letters, numbers, hyphens, underscores only.');
+  const nameReadonly = isDefault ? ' readonly disabled' : '';
+  body.innerHTML = `
+    <div class="main-view-content">
+      <form class="detail-form" onsubmit="event.preventDefault(); saveProfileEdit();">
+        <div class="detail-form-row">
+          <label for="profileEditName">${esc(t('profile_name_label') || 'Name')}</label>
+          <input type="text" id="profileEditName" value="${esc(p.name)}" placeholder="profile-name" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"${nameReadonly}>
+          <div class="detail-form-hint">${esc(nameHint)}</div>
+        </div>
+        ${!isDefault ? `<div class="detail-form-row">
+          <label for="profileEditNewName">${esc(t('profile_rename_label') || 'New name (leave blank to keep)')}</label>
+          <input type="text" id="profileEditNewName" value="" placeholder="${esc(p.name)}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+        </div>` : ''}
+        <div class="detail-form-row">
+          <label for="profileEditModel">${esc(t('profile_model_label') || 'Model / provider')}</label>
+          <select id="profileEditModel"></select>
+        </div>
+        <div class="detail-form-row">
+          <label for="profileEditBaseUrl">${esc(t('profile_base_url_label') || 'Base URL')}</label>
+          <input type="text" id="profileEditBaseUrl" value="${esc(p.base_url || '')}" placeholder="${esc(t('profile_base_url_placeholder') || 'Optional, e.g. http://localhost:11434')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+        </div>
+        <div class="detail-form-row">
+          <label for="profileEditApiKey">${esc(t('profile_api_key_label') || 'API key')}</label>
+          <input type="password" id="profileEditApiKey" value="${p.has_env ? '' : ''}" placeholder="${p.has_env ? esc(t('profile_api_key_placeholder_has') || 'Leave blank to keep existing') : esc(t('profile_api_key_placeholder') || 'Optional')}" autocomplete="off">
+          ${p.has_env ? `<div class="detail-form-hint">${esc(t('profile_api_key_hint') || 'Leave blank to keep existing key. Enter new value to overwrite.')}</div>` : ''}
+        </div>
+        <div id="profileEditError" class="detail-form-error" style="display:none"></div>
+      </form>
+    </div>`;
+  body.style.display = '';
+  if (empty) empty.style.display = 'none';
+  _setProfileHeaderButtons('edit');
+  _populateProfileEditModelSelect(p);
+}
+
+async function _populateProfileEditModelSelect(p){
+  const sel = $('profileEditModel');
+  if (!sel) return;
+  sel.innerHTML = `<option value="">${esc(t('profile_model_keep_current') || 'Keep current')}</option>`;
+  try {
+    const data = await api('/api/models');
+    const groups = (Array.isArray(data && data.groups) && data.groups.length) ? data.groups : [];
+    for (const g of groups) {
+      const og = document.createElement('optgroup');
+      og.label = g.provider || g.provider_id || 'Configured';
+      if (g.provider_id) og.dataset.provider = g.provider_id;
+      for (const m of (Array.isArray(g.models) ? g.models : [])) {
+        if (!m || !m.id) continue;
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.label || m.id;
+        og.appendChild(opt);
+      }
+      if (og.children.length) sel.appendChild(og);
+    }
+    // Pre-select current model if present
+    if (p && p.model) {
+      const currentModel = p.model;
+      if (typeof _applyModelToDropdown === 'function') {
+        _applyModelToDropdown(currentModel, sel, p.provider || null);
+      }
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
+async function saveProfileEdit(){
+  if (!_currentProfileDetail) return;
+  const errEl = $('profileEditError');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  const isDefault = !!(_currentProfileDetail && _currentProfileDetail.is_default);
+  const origName = _currentProfileDetail.name;
+  const newNameEl = $('profileEditNewName');
+  const new_name = (newNameEl && !isDefault) ? (newNameEl.value || '').trim().toLowerCase() : '';
+  const modelEl = $('profileEditModel');
+  const baseEl = $('profileEditBaseUrl');
+  const apiKeyEl = $('profileEditApiKey');
+
+  if (new_name && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(new_name)) {
+    if (errEl) { errEl.textContent = t('profile_name_rule'); errEl.style.display = ''; }
+    return;
+  }
+  const baseUrl = (baseEl ? (baseEl.value || '') : '').trim();
+  const apiKey = (apiKeyEl ? (apiKeyEl.value || '') : '').trim();
+  if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
+    if (errEl) { errEl.textContent = t('profile_base_url_rule'); errEl.style.display = ''; }
+    return;
+  }
+  try {
+    const payload = { name: origName };
+    if (new_name && new_name !== origName) payload.new_name = new_name;
+    if (baseUrl) payload.base_url = baseUrl;
+    if (apiKey) payload.api_key = apiKey;
+    const selectedModel = modelEl ? (modelEl.value || '').trim() : '';
+    if (selectedModel) {
+      const modelState = (typeof _modelStateForSelect === 'function')
+        ? _modelStateForSelect(modelEl, selectedModel)
+        : { model: selectedModel, model_provider: null };
+      if (modelState.model) payload.default_model = modelState.model;
+      if (modelState.model_provider) payload.model_provider = modelState.model_provider;
+    }
+    const data = await api('/api/profile/update', { method: 'POST', body: JSON.stringify(payload) });
+    _invalidateKanbanProfileCache();
+    _profilePreFormDetail = null;
+    await loadProfilesPanel();
+    const updatedName = (data && data.profile && data.profile.name) || new_name || origName;
+    showToast(t('profile_updated', updatedName));
+    openProfileDetail(updatedName);
+  } catch (e) {
+    if (errEl) { errEl.textContent = e.message || t('update_failed'); errEl.style.display = ''; }
+  }
 }
 
 async function deleteProfile(name) {
@@ -6805,7 +6941,7 @@ function _buildProviderCard(p){
       <div class="provider-card-meta">${esc(metaText)}</div>
       ${badgesHtml}
     </div>
-    <svg class="provider-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16"><path d="M6 9l6 6 6-6"/></svg>
+    <svg class="provider-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="14" height="14"><path d="M6 9l6 6 6-6"/></svg>
   `;
   card.appendChild(header);
 

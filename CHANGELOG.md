@@ -5,6 +5,7 @@
 
 ### Added
 
+- **Profile Edit** — Edit existing profiles in the WebUI. New `POST /api/profile/update` endpoint supports updating model/provider, base URL, API key, name (rename), description, and default workspace. Profile detail view now shows an Edit button with a pre-populated form. Default profile can be edited but not renamed. Non-default profiles support full rename via `hermes profile rename`. Changes invalidate model caches so subsequent `/api/models` calls reflect updated config. Frontend includes i18n support (English + Chinese simplified).
 - **Provider Registry** — SQLite-backed provider management with official + custom provider unification. Bootstraps official providers (openai, anthropic, etc.) and imports legacy `custom_providers[]` from config.yaml on first run. Supports OpenAI (`completions`/`messages`/`responses`) and Anthropic adapters, per-provider credential storage (base64 encryption, phase 1), model cache refresh, usage probing (native adapter + custom endpoint), and optimistic concurrency on updates. All registry operations exposed via `/api/providers/registry` routes with full backward-compatible legacy `/api/providers` bridge. Profile-scoped `providers.db` per Hermes profile. 202 new tests covering DB schema, service CRUD, projection, credentials, routes, adapters, and UI structure.
 
 ## [v0.51.152] — 2026-05-28 — Release DX (stage-batch34 — single-PR optional gateway-backed browser chat)
