@@ -837,6 +837,7 @@
         <div class="main-view-title" id="profileDetailTitle"></div>
         <div class="main-view-actions">
           <button id="btnActivateProfileDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Activate" data-i18n-title="profile_switch_title" onclick="activateCurrentProfile()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+          <button id="btnEditProfileDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Edit" data-i18n-title="profile_edit_title" onclick="openProfileEditForm()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg></button>
           <button id="btnDeleteProfileDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Delete" data-i18n-title="profile_delete_title" onclick="deleteCurrentProfile()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
           <button id="btnCancelProfileDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Cancel" data-i18n-title="cancel" onclick="cancelProfileForm()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           <button id="btnSaveProfileDetail" class="panel-head-btn primary has-tooltip has-tooltip--bottom" data-tooltip="Save" data-i18n-title="save" onclick="saveProfileForm()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
@@ -1513,7 +1514,7 @@
 </div>
 <!-- Provider Create/Edit Modal -->
 <div class="kanban-modal-overlay" id="providerModal" hidden onclick="if(event.target===this)closeProviderModal()">
-  <div class="kanban-modal" role="dialog" aria-modal="true" aria-labelledby="providerModalTitle" style="width:min(520px,100%)">
+  <div class="kanban-modal" role="dialog" aria-modal="true" aria-labelledby="providerModalTitle" style="width:min(460px,100%)">
     <h3 id="providerModalTitle" data-i18n="provider_modal_create_title">Add Custom Provider</h3>
     <input type="hidden" id="providerModalMode" value="create">
     <input type="hidden" id="providerModalOriginalId" value="">
@@ -1543,7 +1544,16 @@
     </div>
     <div class="kanban-modal-row">
       <label for="providerModalApiKey" data-i18n="provider_modal_api_key">API Key</label>
-      <input type="password" id="providerModalApiKey" placeholder="sk-..." autocomplete="off">
+      <div class="password-input-wrap">
+        <input type="password" id="providerModalApiKey" placeholder="sk-..." autocomplete="off">
+        <button type="button" class="password-toggle-btn" id="providerApiKeyToggle" onclick="togglePasswordVisibility('providerModalApiKey', this)" aria-label="Toggle API key visibility" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path class="eye-open" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle class="eye-open" cx="12" cy="12" r="3"/>
+            <path class="eye-closed" d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" style="display:none"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="kanban-modal-row">
       <label for="providerModalDefaultModel" data-i18n="provider_modal_default_model">Default Model (optional)</label>

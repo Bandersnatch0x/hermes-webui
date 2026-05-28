@@ -8789,3 +8789,16 @@ async function uploadPendingFiles(){
   if(extracted.length)showToast(t('archive_extracted',extracted.reduce((s,n)=>s+n.extracted,0),extracted.length));
   return names;
 }
+
+/** Toggle password field visibility and update the toggle button icon. */
+function togglePasswordVisibility(inputId, btn){
+  const input=document.getElementById(inputId);
+  if(!input)return;
+  const isPassword=input.type==='password';
+  input.type=isPassword?'text':'password';
+  // Toggle SVG paths: eye-open ↔ eye-closed
+  const open=btn.querySelectorAll('.eye-open');
+  const closed=btn.querySelectorAll('.eye-closed');
+  for(const el of open)el.style.display=isPassword?'none':'';
+  for(const el of closed)el.style.display=isPassword?'':'none';
+}
