@@ -1220,6 +1220,24 @@
                 <div class="settings-section-meta" data-i18n="providers_section_meta">Manage API keys for AI providers. Changes take effect immediately.</div>
               </div>
             </div>
+            <!-- Active provider summary bar -->
+            <div id="providersSummary" class="providers-summary" style="display:none"></div>
+            <!-- Official providers section -->
+            <div id="providersOfficialSection" class="providers-section" style="display:none">
+              <div class="providers-section-header">
+                <span class="providers-section-title" data-i18n="providers_official_title">Official Providers</span>
+              </div>
+              <div id="providersOfficialList" class="providers-section-list"></div>
+            </div>
+            <!-- Custom providers section -->
+            <div id="providersCustomSection" class="providers-section" style="display:none">
+              <div class="providers-section-header">
+                <span class="providers-section-title" data-i18n="providers_custom_title">Custom Providers</span>
+                <button type="button" class="provider-card-btn provider-card-btn-primary" id="btnCreateProvider" onclick="openProviderModal()" data-i18n="providers_create_btn">+ Add Provider</button>
+              </div>
+              <div id="providersCustomList" class="providers-section-list"></div>
+            </div>
+            <!-- Legacy: kept for quota card fallback -->
             <div id="providersList" style="display:flex;flex-direction:column;margin-top:4px">
               <!-- Populated dynamically by loadProvidersPanel() -->
             </div>
@@ -1490,6 +1508,91 @@
     <div class="kanban-modal-actions">
       <button type="button" class="btn secondary" onclick="closeKanbanTaskModal()" data-i18n="cancel">Cancel</button>
       <button type="button" class="btn primary" id="kanbanTaskModalSubmit" onclick="submitKanbanTaskModal()" data-i18n="create">Create</button>
+    </div>
+  </div>
+</div>
+<!-- Provider Create/Edit Modal -->
+<div class="kanban-modal-overlay" id="providerModal" hidden onclick="if(event.target===this)closeProviderModal()">
+  <div class="kanban-modal" role="dialog" aria-modal="true" aria-labelledby="providerModalTitle" style="width:min(520px,100%)">
+    <h3 id="providerModalTitle" data-i18n="provider_modal_create_title">Add Custom Provider</h3>
+    <input type="hidden" id="providerModalMode" value="create">
+    <input type="hidden" id="providerModalOriginalId" value="">
+    <div class="kanban-modal-row">
+      <label for="providerModalDisplayName" data-i18n="provider_modal_display_name">Display Name</label>
+      <input type="text" id="providerModalDisplayName" maxlength="64" placeholder="My Provider" autocomplete="off" required>
+    </div>
+    <div class="kanban-modal-row-inline">
+      <div class="kanban-modal-row">
+        <label for="providerModalAdapterType" data-i18n="provider_modal_adapter_type">Adapter Type</label>
+        <select id="providerModalAdapterType" onchange="onProviderAdapterTypeChange()">
+          <option value="openai">OpenAI-compatible</option>
+          <option value="anthropic">Anthropic-compatible</option>
+        </select>
+      </div>
+      <div class="kanban-modal-row">
+        <label for="providerModalEnabled" data-i18n="provider_modal_enabled">Enabled</label>
+        <select id="providerModalEnabled">
+          <option value="true" data-i18n="yes">Yes</option>
+          <option value="false" data-i18n="no">No</option>
+        </select>
+      </div>
+    </div>
+    <div class="kanban-modal-row">
+      <label for="providerModalBaseUrl" data-i18n="provider_modal_base_url">Base URL</label>
+      <input type="text" id="providerModalBaseUrl" placeholder="https://api.example.com/v1" autocomplete="off" required>
+    </div>
+    <div class="kanban-modal-row">
+      <label for="providerModalApiKey" data-i18n="provider_modal_api_key">API Key</label>
+      <input type="password" id="providerModalApiKey" placeholder="sk-..." autocomplete="off">
+    </div>
+    <div class="kanban-modal-row">
+      <label for="providerModalDefaultModel" data-i18n="provider_modal_default_model">Default Model (optional)</label>
+      <input type="text" id="providerModalDefaultModel" placeholder="gpt-4o" autocomplete="off">
+    </div>
+    <!-- OpenAI-specific fields -->
+    <div id="providerModalOpenaiFields">
+      <div class="kanban-modal-row">
+        <label for="providerModalResponseFormat" data-i18n="provider_modal_response_format">Response Format</label>
+        <select id="providerModalResponseFormat">
+          <option value="chat">Chat Completions (messages)</option>
+          <option value="completions">Legacy Completions</option>
+          <option value="responses">Responses API</option>
+        </select>
+      </div>
+      <div class="kanban-modal-row">
+        <label for="providerModalModelsEndpoint" data-i18n="provider_modal_models_endpoint">Models Endpoint (optional)</label>
+        <input type="text" id="providerModalModelsEndpoint" placeholder="https://api.example.com/v1/models" autocomplete="off">
+      </div>
+    </div>
+    <!-- Usage tracking -->
+    <details class="provider-modal-details">
+      <summary data-i18n="provider_modal_usage_section">Usage Tracking (optional)</summary>
+      <div class="kanban-modal-row">
+        <label for="providerModalUsageStrategy" data-i18n="provider_modal_usage_strategy">Usage Strategy</label>
+        <select id="providerModalUsageStrategy" onchange="onProviderUsageStrategyChange()">
+          <option value="none">None</option>
+          <option value="native">Native (adapter built-in)</option>
+          <option value="custom">Custom endpoint</option>
+        </select>
+      </div>
+      <div id="providerModalUsageCustomFields" style="display:none">
+        <div class="kanban-modal-row">
+          <label for="providerModalUsageEndpoint" data-i18n="provider_modal_usage_endpoint">Usage Endpoint URL</label>
+          <input type="text" id="providerModalUsageEndpoint" placeholder="https://api.example.com/v1/usage" autocomplete="off">
+        </div>
+        <div class="kanban-modal-row">
+          <label for="providerModalUsageParser" data-i18n="provider_modal_usage_parser">Parser Type</label>
+          <select id="providerModalUsageParser">
+            <option value="json">JSON</option>
+            <option value="text">Text</option>
+          </select>
+        </div>
+      </div>
+    </details>
+    <div class="kanban-modal-error" id="providerModalError" aria-live="polite"></div>
+    <div class="kanban-modal-actions">
+      <button type="button" class="btn secondary" onclick="closeProviderModal()" data-i18n="cancel">Cancel</button>
+      <button type="button" class="btn primary" id="providerModalSubmit" onclick="submitProviderModal()" data-i18n="create">Create</button>
     </div>
   </div>
 </div>

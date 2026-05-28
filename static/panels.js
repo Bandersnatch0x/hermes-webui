@@ -6406,25 +6406,92 @@ async function _fetchProviderQuotaStatus(force=false){
 async function loadProvidersPanel(){
   const list=$('providersList');
   const empty=$('providersEmpty');
+  const summaryEl=$('providersSummary');
+  const officialSection=$('providersOfficialSection');
+  const officialList=$('providersOfficialList');
+  const customSection=$('providersCustomSection');
+  const customList=$('providersCustomList');
   if(!list) return;
   try{
     const data=await api('/api/providers');
     const quota=await _fetchProviderQuotaStatus(false).catch(e=>({ok:false,status:'unavailable',quota:null,message:e.message||t('provider_quota_unavailable'),client_fetched_at:new Date().toISOString()}));
-    const providers=(data.providers||[]).filter(p=>p.configurable||p.is_oauth||p.is_custom);
+    const allProviders=(data.providers||[]);
+    const visibleProviders=allProviders.filter(p=>p.configurable||p.is_oauth||p.is_custom);
     list.innerHTML='';
     _providerCardEls.clear();
+
+    // ── Active provider summary ──
+    if(summaryEl){
+      const activeProvider=window._activeProvider||'';
+      const activeName=activeProvider
+        ? (allProviders.find(p=>p.id===activeProvider)||{}).display_name||activeProvider
+        : '';
+      const configuredCount=visibleProviders.filter(p=>p.has_key).length;
+      if(activeName||configuredCount>0){
+        summaryEl.innerHTML=`
+          <div class="providers-summary-inner">
+            <div class="providers-summary-stat">
+              <span class="providers-summary-label">${esc(t('providers_summary_active')||'Active provider')}</span>
+              <strong>${esc(activeName||t('providers_summary_none')||'None')}</strong>
+            </div>
+            <div class="providers-summary-stat">
+              <span class="providers-summary-label">${esc(t('providers_summary_configured')||'Configured')}</span>
+              <strong>${configuredCount} / ${visibleProviders.length}</strong>
+            </div>
+          </div>
+        `;
+        summaryEl.style.display='';
+      }else{
+        summaryEl.style.display='none';
+      }
+    }
+
+    // ── Split into official vs custom ──
+    const official=visibleProviders.filter(p=>!p.is_custom);
+    const custom=visibleProviders.filter(p=>p.is_custom);
+
+    // Quota card at top of list (legacy container for backward compat)
     const quotaCard=_buildProviderQuotaCard(quota);
     if(quotaCard) list.appendChild(quotaCard);
-    if(providers.length===0){
+
+    if(visibleProviders.length===0){
       list.style.display='none';
       if(empty) empty.style.display='';
+      if(officialSection) officialSection.style.display='none';
+      if(customSection) customSection.style.display='none';
       return;
     }
     if(empty) empty.style.display='none';
-    list.style.display='';
-    for(const p of providers){
-      list.appendChild(_buildProviderCard(p));
+
+    // ── Official providers ──
+    if(officialSection&&officialList){
+      if(official.length>0){
+        officialSection.style.display='';
+        officialList.innerHTML='';
+        for(const p of official){
+          officialList.appendChild(_buildProviderCard(p));
+        }
+      }else{
+        officialSection.style.display='none';
+      }
     }
+
+    // ── Custom providers ──
+    if(customSection&&customList){
+      if(custom.length>0||true){
+        customSection.style.display='';
+        customList.innerHTML='';
+        for(const p of custom){
+          customList.appendChild(_buildProviderCard(p));
+        }
+        if(custom.length===0){
+          customList.innerHTML=`<div class="providers-empty-custom">${esc(t('providers_no_custom')||'No custom providers configured. Click "+ Add Provider" to create one.')}</div>`;
+        }
+      }
+    }
+
+    // Hide legacy list (quota card moved to official section top)
+    list.style.display='none';
   }catch(e){
     list.innerHTML='<div style="color:var(--error);padding:12px;font-size:13px">Failed to load providers: '+esc(e.message||String(e))+'</div>';
   }
@@ -6704,15 +6771,39 @@ function _buildProviderCard(p){
   const header=document.createElement('button');
   header.type='button';
   header.className='provider-card-header';
+  // Status badges
+  const badges=[];
+  if(p.has_key) badges.push(`<span class="provider-badge provider-badge-ok">${esc(t('providers_badge_configured')||'API configured')}</span>`);
+  if(modelCount>0) badges.push(`<span class="provider-badge provider-badge-models">${esc(t('providers_badge_models_synced')||'models synced')}</span>`);
+  const isActive=(window._activeProvider||'')===p.id;
+  if(isActive) badges.push(`<span class="provider-badge provider-badge-active">${esc(t('providers_badge_active')||'active')}</span>`);
+  const badgesHtml=badges.length?`<div class="provider-card-badges">${badges.join('')}</div>`:'';
   header.innerHTML=`
     <div class="provider-card-info">
       <div class="provider-card-name">${esc(p.display_name)}</div>
       <div class="provider-card-meta">${esc(metaText)}</div>
+      ${badgesHtml}
     </div>
-    ${p.has_key?`<span class="provider-card-badge">${esc(t('providers_status_configured'))}</span>`:''}
     <svg class="provider-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16"><path d="M6 9l6 6 6-6"/></svg>
   `;
   card.appendChild(header);
+
+  // Sync failure warning banner (if auth_error present)
+  if(p.auth_error){
+    const warnBanner=document.createElement('div');
+    warnBanner.className='provider-sync-warning';
+    warnBanner.innerHTML=`<span class="provider-sync-warning-icon">⚠</span><span class="provider-sync-warning-text">${esc(p.auth_error)}</span>`;
+    const warnActions=document.createElement('div');
+    warnActions.className='provider-sync-warning-actions';
+    const retryBtn=document.createElement('button');
+    retryBtn.type='button';
+    retryBtn.className='provider-card-btn provider-card-btn-ghost';
+    retryBtn.textContent=t('providers_sync_retry')||'Retry sync';
+    retryBtn.onclick=async(e)=>{e.stopPropagation();retryBtn.disabled=true;await _refreshProviderModels(p.id,retryBtn);await loadProvidersPanel();};
+    warnActions.appendChild(retryBtn);
+    warnBanner.appendChild(warnActions);
+    card.appendChild(warnBanner);
+  }
 
   const body=document.createElement('div');
   body.className='provider-card-body';
@@ -6789,6 +6880,25 @@ function _buildProviderCard(p){
       ? 'Custom provider loaded from config.yaml / hermes model. Edit it from the CLI or config file.'
       : 'Provider is managed outside the WebUI.';
     body.appendChild(hint);
+    // Edit/Delete buttons for custom providers
+    if(p.is_custom){
+      const actionRow=document.createElement('div');
+      actionRow.className='provider-card-row';
+      actionRow.style.marginTop='8px';
+      const editBtn=document.createElement('button');
+      editBtn.type='button';
+      editBtn.className='provider-card-btn provider-card-btn-ghost';
+      editBtn.textContent=t('providers_edit')||'Edit';
+      editBtn.onclick=()=>openProviderModal(p);
+      actionRow.appendChild(editBtn);
+      const delBtn=document.createElement('button');
+      delBtn.type='button';
+      delBtn.className='provider-card-btn provider-card-btn-danger';
+      delBtn.textContent=t('providers_remove');
+      delBtn.onclick=()=>_removeProviderKey(p.id);
+      actionRow.appendChild(delBtn);
+      body.appendChild(actionRow);
+    }
   }
 
   // Model list — show when provider has known models
@@ -6967,6 +7077,112 @@ async function _refreshProviderModels(providerId, btn){
   }finally{
     btn.disabled=false;
     btn.innerHTML=orig;
+  }
+}
+
+// ── Provider Create/Edit Modal ─────────────────────────────────────────────
+
+function openProviderModal(provider){
+  const modal=$('providerModal');
+  if(!modal) return;
+  const isEdit=!!(provider&&provider.id);
+  const mode=$('providerModalMode');
+  const title=$('providerModalTitle');
+  const submit=$('providerModalSubmit');
+  const origId=$('providerModalOriginalId');
+  if(mode) mode.value=isEdit?'edit':'create';
+  if(title) title.textContent=isEdit?(t('provider_modal_edit_title')||'Edit Provider'):(t('provider_modal_create_title')||'Add Custom Provider');
+  if(submit) submit.textContent=isEdit?(t('save')||'Save'):(t('create')||'Create');
+  if(origId) origId.value=isEdit?provider.id:'';
+  // Populate fields
+  const set=(id,val)=>{const el=$(id);if(el) el.value=(val==null?'':String(val));};
+  set('providerModalDisplayName',isEdit?provider.display_name:'');
+  set('providerModalBaseUrl',isEdit?(provider.base_url||''):'');
+  set('providerModalApiKey','');
+  set('providerModalDefaultModel',isEdit?(provider.default_model||''):'');
+  set('providerModalAdapterType',isEdit?(provider.adapter_type||'openai'):'openai');
+  set('providerModalEnabled',isEdit?(provider.enabled!==false?'true':'false'):'true');
+  set('providerModalResponseFormat',isEdit?(provider.response_format||'chat'):'chat');
+  set('providerModalModelsEndpoint',isEdit?(provider.models_endpoint||''):'');
+  set('providerModalUsageStrategy',isEdit?(provider.usage_strategy||'none'):'none');
+  set('providerModalUsageEndpoint',isEdit?(provider.usage_endpoint_url||''):'');
+  set('providerModalUsageParser',isEdit?(provider.usage_parser_type||'json'):'json');
+  onProviderAdapterTypeChange();
+  onProviderUsageStrategyChange();
+  const err=$('providerModalError'); if(err) err.textContent='';
+  modal.hidden=false;
+  const nameInput=$('providerModalDisplayName'); if(nameInput) setTimeout(()=>nameInput.focus(),50);
+}
+
+function closeProviderModal(){
+  const modal=$('providerModal');
+  if(modal) modal.hidden=true;
+}
+
+function onProviderAdapterTypeChange(){
+  const sel=$('providerModalAdapterType');
+  const openaiFields=$('providerModalOpenaiFields');
+  if(sel&&openaiFields) openaiFields.style.display=sel.value==='openai'?'':'none';
+}
+
+function onProviderUsageStrategyChange(){
+  const sel=$('providerModalUsageStrategy');
+  const customFields=$('providerModalUsageCustomFields');
+  if(sel&&customFields) customFields.style.display=sel.value==='custom'?'':'none';
+}
+
+async function submitProviderModal(){
+  const mode=($("providerModalMode")||{}).value||'create';
+  const displayName=($("providerModalDisplayName")||{}).value||'';
+  const adapterType=($("providerModalAdapterType")||{}).value||'openai';
+  const baseUrl=($("providerModalBaseUrl")||{}).value||'';
+  const apiKey=($("providerModalApiKey")||{}).value||'';
+  const defaultModel=($("providerModalDefaultModel")||{}).value||'';
+  const enabled=($("providerModalEnabled")||{}).value!=='false';
+  const responseFormat=($("providerModalResponseFormat")||{}).value||'chat';
+  const modelsEndpoint=($("providerModalModelsEndpoint")||{}).value||'';
+  const usageStrategy=($("providerModalUsageStrategy")||{}).value||'none';
+  const usageEndpoint=($("providerModalUsageEndpoint")||{}).value||'';
+  const usageParser=($("providerModalUsageParser")||{}).value||'json';
+  const originalId=($("providerModalOriginalId")||{}).value||'';
+  const err=$('providerModalError');
+  if(!displayName.trim()){if(err) err.textContent=t('provider_modal_err_name')||'Display name is required';return;}
+  if(!baseUrl.trim()){if(err) err.textContent=t('provider_modal_err_url')||'Base URL is required';return;}
+  const payload={
+    display_name:displayName.trim(),
+    adapter_type:adapterType,
+    base_url:baseUrl.trim(),
+    enabled,
+    default_model:defaultModel.trim()||undefined,
+    usage_strategy:usageStrategy,
+  };
+  if(apiKey.trim()) payload.api_key=apiKey.trim();
+  if(adapterType==='openai'){
+    payload.response_format=responseFormat;
+    if(modelsEndpoint.trim()) payload.models_endpoint=modelsEndpoint.trim();
+  }
+  if(usageStrategy==='custom'){
+    payload.usage_endpoint_url=usageEndpoint.trim();
+    payload.usage_parser_type=usageParser;
+  }
+  const submitBtn=$('providerModalSubmit');
+  if(submitBtn){submitBtn.disabled=true;submitBtn.textContent=t('saving')||'Saving...';}
+  try{
+    const endpoint=mode==='edit'?`/api/providers/custom/${encodeURIComponent(originalId)}`:'/api/providers/custom';
+    const method=mode==='edit'?'PUT':'POST';
+    const res=await api(endpoint,{method,body:JSON.stringify(payload)});
+    if(res.ok){
+      showToast(t('providers_custom_saved')||('Provider '+res.provider+' saved'));
+      closeProviderModal();
+      _refreshModelDropdownsAfterProviderChange();
+      await loadProvidersPanel();
+    }else{
+      if(err) err.textContent=res.error||'Failed to save provider';
+    }
+  }catch(e){
+    if(err) err.textContent='Error: '+e.message;
+  }finally{
+    if(submitBtn){submitBtn.disabled=false;submitBtn.textContent=mode==='edit'?(t('save')||'Save'):(t('create')||'Create');}
   }
 }
 
