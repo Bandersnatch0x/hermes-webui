@@ -154,10 +154,39 @@ HERMES_WEBUI_PREFILL_MESSAGES_SCRIPT_TIMEOUT=5 \
 ```
 
 The script may print either an OpenAI-style JSON message list, a JSON object with
-a `messages` list, or plain text; plain text is wrapped as one `system` prefill
-message. Script output is capped at 256 KiB before parsing. The browser only
-receives a compact status event (`source`, `label`, message count, and redacted
-errors), never the prefill message bodies.
+a `messages` list, or plain text; plain text is wrapped as one `user` prefill
+message so dynamic recall text becomes ordinary context instead of an extra
+system instruction. If the hook must provide system-level guidance, emit JSON
+messages with an explicit `role: "system"` entry instead. Script output is capped
+at 256 KiB before parsing. The browser only receives a compact status event
+(`source`, `label`, message count, and redacted errors), never the prefill
+message bodies.
+
+### Optional Gateway-backed browser chat
+
+By default, browser chat runs through WebUI's in-process legacy runtime. Advanced
+self-hosted deployments can opt into routing new browser turns through a running
+Hermes Gateway API server while preserving the existing WebUI `/api/chat/start`
+and `/api/chat/stream` browser contract:
+
+```bash
+HERMES_WEBUI_CHAT_BACKEND=gateway \
+HERMES_WEBUI_GATEWAY_BASE_URL=http://127.0.0.1:8642 \
+HERMES_WEBUI_GATEWAY_API_KEY=... \
+./ctl.sh restart
+```
+
+`HERMES_WEBUI_CHAT_BACKEND` is intentionally strict: only `gateway`,
+`api_server`, or `api-server` enable the bridge. Generic truthy values such as
+`1` or `true` are ignored so existing deployments do not change execution
+ownership accidentally. If `HERMES_WEBUI_GATEWAY_API_KEY` is omitted, WebUI falls
+back to `API_SERVER_KEY` when present.
+
+The bridge is best used by operators who already run Hermes Gateway/API Server
+locally and want browser-originated chat to use the same runtime/tool path as
+messaging surfaces. Attachments, cancellation, approvals, and clarify prompts
+still follow WebUI's current compatibility path and may not match every messaging
+surface until the runtime-adapter migration is complete.
 
 The bootstrap will:
 

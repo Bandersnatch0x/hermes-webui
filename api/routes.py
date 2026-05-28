@@ -2385,6 +2385,15 @@ def _is_cli_session_for_settings(session: dict) -> bool:
     )
 
 
+def _normalize_sidebar_source_flags(session: dict) -> dict:
+    """Return a sidebar row with the frontend CLI flag matching source metadata."""
+    if not isinstance(session, dict):
+        return session
+    normalized = dict(session)
+    normalized["is_cli_session"] = is_cli_session_row(normalized)
+    return normalized
+
+
 CLI_VISIBLE_SESSION_CAP = 20
 
 
@@ -2414,7 +2423,11 @@ def _merge_cli_sidebar_metadata(ui_session: dict, cli_meta: dict) -> dict:
     if not cli_meta:
         return dict(ui_session)
     merged = dict(ui_session)
-    merged["is_cli_session"] = True
+    # Only preserve the CLI flag when the imported metadata is actually a CLI
+    # row. WebUI sessions are also mirrored into state.db; treating every
+    # matching state row as CLI hides long WebUI continuations from the default
+    # sidebar source tab.
+    merged["is_cli_session"] = is_cli_session_row(cli_meta)
     for key in (
         "source_tag",
         "raw_source",
@@ -2541,6 +2554,7 @@ from api.models import (
     prune_session_from_index,
     ensure_cron_project,
     is_cron_session,
+    is_safe_session_id,
 )
 from api.workspace import (
     load_workspaces,
@@ -2565,6 +2579,7 @@ from api.streaming import (
     cancel_stream,
     _materialize_pending_user_turn_before_error,
 )
+from api.gateway_chat import _run_gateway_chat_streaming, webui_gateway_chat_enabled
 from api.run_journal import (
     find_run_summary,
     read_run_events,
@@ -4197,8 +4212,7 @@ def handle_get(handler, parsed) -> bool:
                     )
             else:
                 if is_messaging_session and cli_messages:
-                    sidecar_messages = getattr(s, "messages", []) or []
-                    _all_msgs = merge_session_messages_append_only(cli_messages, sidecar_messages)
+                    _all_msgs = _merged_session_messages_for_display(s, cli_messages)
                 else:
                     if metadata_summary is None:
                         metadata_summary = _message_summary(getattr(s, "messages", []) or [])
@@ -4460,6 +4474,7 @@ def handle_get(handler, parsed) -> bool:
             diag.stage("load_settings")
             settings = load_settings()
             show_cli_sessions = bool(settings.get("show_cli_sessions"))
+            webui_sessions = [_normalize_sidebar_source_flags(s) for s in webui_sessions]
             if show_cli_sessions:
                 diag.stage("get_cli_sessions")
                 cli = get_cli_sessions()
@@ -4477,6 +4492,7 @@ def handle_get(handler, parsed) -> bool:
                         for key in ("source_tag", "raw_source", "session_source", "source_label"):
                             if not s.get(key) and meta.get(key):
                                 s[key] = meta[key]
+                webui_sessions = [_normalize_sidebar_source_flags(s) for s in webui_sessions]
                 # Apply the same CLI visibility semantics to imported local copies so
                 # low-value imported artifacts do not leak into the sidebar.
                 webui_sessions = [s for s in webui_sessions if is_cli_session_row_visible(s)]
@@ -4838,6 +4854,42 @@ def handle_get(handler, parsed) -> bool:
         category = qs.get("category", [None])[0]
         data = _skills_list_from_dir(_active_skills_dir(), category=category)
         return j(handler, {"skills": data.get("skills", [])})
+
+    if parsed.path == "/api/skills/usage":
+        from api.skill_usage import read_skill_usage
+        raw = read_skill_usage(_active_skills_dir())
+        # Pass through agent's format as-is; defensive coercion for fields
+        usage = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if not isinstance(v, dict):
+                    usage[k] = {"use_count": 0, "view_count": 0, "patch_count": 0}
+                    continue
+                usage[k] = {
+                    "use_count": (int(v["use_count"]) if v.get("use_count") is not None else 0),
+                    "view_count": (int(v["view_count"]) if v.get("view_count") is not None else 0),
+                    "patch_count": (int(v["patch_count"]) if v.get("patch_count") is not None else 0),
+                }
+                # Preserve agent's metadata (timestamps, state, etc.)
+                for meta_key in v:
+                    if meta_key not in usage[k]:
+                        usage[k][meta_key] = v[meta_key]
+        skills_data = _skills_list_from_dir(_active_skills_dir()).get("skills", [])
+        skill_names = sorted({s["name"] for s in skills_data})
+        total = sum(
+            e.get("use_count", 0) + e.get("view_count", 0) + e.get("patch_count", 0)
+            for e in usage.values()
+        )
+        unique = sum(
+            1 for e in usage.values()
+            if e.get("use_count", 0) > 0 or e.get("view_count", 0) > 0 or e.get("patch_count", 0) > 0
+        )
+        return j(handler, {
+            "usage": usage,
+            "skill_names": skill_names,
+            "total_invocations": total,
+            "unique_skills_used": unique,
+        })
 
     if parsed.path == "/api/skills/content":
         qs = parse_qs(parsed.query)
@@ -5550,7 +5602,7 @@ def handle_post(handler, parsed) -> bool:
         if not sid or not isinstance(sid, str) or not sid.strip():
             return bad(handler, "session_id must be a non-empty string", status=400)
         sid = sid.strip()
-        if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
+        if not is_safe_session_id(sid):
             return bad(handler, "Invalid session_id", 400)
         try:
             s = get_session(sid, metadata_only=True)
@@ -5572,7 +5624,7 @@ def handle_post(handler, parsed) -> bool:
         sid = body.get("session_id", "")
         if not sid:
             return bad(handler, "session_id is required")
-        if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
+        if not is_safe_session_id(sid):
             return bad(handler, "Invalid session_id", 400)
         cli_meta_for_delete = _lookup_cli_session_metadata(sid)
         if cli_meta_for_delete.get("read_only"):
@@ -9084,10 +9136,15 @@ def _start_chat_stream_for_session(
     if goal_related:
         STREAM_GOAL_RELATED[stream_id] = True
     diag.stage("worker_thread_start") if diag else None
+    backend_is_gateway = webui_gateway_chat_enabled(get_config())
+    worker_target = _run_gateway_chat_streaming if backend_is_gateway else _run_agent_streaming
+    worker_kwargs = {"model_provider": model_provider}
+    if not backend_is_gateway:
+        worker_kwargs["goal_related"] = goal_related
     thr = threading.Thread(
-        target=_run_agent_streaming,
+        target=worker_target,
         args=(s.session_id, msg, model, workspace, stream_id, attachments),
-        kwargs={"model_provider": model_provider, "goal_related": goal_related},
+        kwargs=worker_kwargs,
         daemon=True,
     )
     thr.start()

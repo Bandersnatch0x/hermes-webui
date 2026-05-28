@@ -7,6 +7,62 @@
 
 - **Provider Registry** — SQLite-backed provider management with official + custom provider unification. Bootstraps official providers (openai, anthropic, etc.) and imports legacy `custom_providers[]` from config.yaml on first run. Supports OpenAI (`completions`/`messages`/`responses`) and Anthropic adapters, per-provider credential storage (base64 encryption, phase 1), model cache refresh, usage probing (native adapter + custom endpoint), and optimistic concurrency on updates. All registry operations exposed via `/api/providers/registry` routes with full backward-compatible legacy `/api/providers` bridge. Profile-scoped `providers.db` per Hermes profile. 202 new tests covering DB schema, service CRUD, projection, credentials, routes, adapters, and UI structure.
 
+## [v0.51.152] — 2026-05-28 — Release DX (stage-batch34 — single-PR optional gateway-backed browser chat)
+
+### Added
+
+- Browser chat can now opt into a default-off `HERMES_WEBUI_CHAT_BACKEND=gateway` bridge that routes new WebUI turns through a running Hermes Gateway API server while preserving the existing WebUI chat start/stream contract. Strict enable: only the literal values `gateway`, `api_server`, or `api-server` activate the bridge — generic truthy strings like `1` or `true` keep the legacy in-process WebUI runtime. Configurable via `HERMES_WEBUI_GATEWAY_BASE_URL` (default `http://127.0.0.1:8642`) and `HERMES_WEBUI_GATEWAY_API_KEY` (falls back to `API_SERVER_KEY`). New `api/gateway_chat.py` module isolates the bridge logic; existing direct WebUI chat path unchanged when the env/config is not set. (#3021)
+
+## [v0.51.151] — 2026-05-28 — Release DW (stage-batch33 — 3-PR mid-risk batch: SSE reattach + title-lang + composer cap)
+
+### Fixed
+
+- Live SSE stream now reattaches when returning to a session that lost its connection during a session switch, closing the connection-leak window where stale `EventSource`s could accumulate. Also fixes a `_dirty_suffix` correctness path and yields the GIL after every SSE put so the HTTP server stays responsive under burst load. (#2924, #2925)
+- Generated session titles now stay in the conversation language by adding an explicit title-generation instruction to the auxiliary prompt. Prevents the default prompt from drifting into English for non-English conversations. (#2984)
+
+### Changed
+
+- Composer box max-width is now capped at 1600px on ultrawide viewports (≥1600px) so chips stay anchored against a content-sized boundary instead of stretching across 3440px+ displays. Maintainer-confirmed cap from the #2856 thread. (#2946)
+
+## [v0.51.150] — 2026-05-28 — Release DV (stage-batch32 — single-PR reasoning-effort agent metadata)
+
+### Fixed
+
+- Reasoning-effort capability detection now consults Hermes Agent's `models.dev` metadata before falling back to WebUI-local provider/model prefix heuristics. xAI OAuth Grok models (e.g. `grok-4.3`) and other native/provider-specific catalogs that Hermes Agent already knows about now show the reasoning-effort chip without requiring a per-provider WebUI allowlist update. Existing exact-resolver paths (ACP unsupported, Copilot/GitHub effort subsets, OpenAI Codex, LM Studio live probing) keep their authoritative behavior — the new metadata lookup sits between those resolvers and the broad heuristic fallback. Metadata `supports_reasoning=False` is treated as authoritative so known non-reasoning variants stay hidden. Also: the no-query boot path of `/api/reasoning` now hydrates against the configured default model so the chip can populate before the front-end has session model context. (#3017)
+
+## [v0.51.149] — 2026-05-28 — Release DU (stage-batch31 — hyphenated session ids + prefill role consistency)
+
+### Fixed
+
+- Session IDs containing hyphens (e.g. API-issued `api-*` and gateway-issued `reachy-voice-*`) are now accepted by every filesystem-touching session validator: `Session.load`, `Session.load_metadata_only`, `_repair_stale_pending`, `/api/session/delete`, and `/api/session/worktree/remove`. Previously the load path accepted hyphens but the delete and worktree-remove routes rejected them with HTTP 400, producing a confusing "visible in sidebar but undeletable" UX. Refactors the duplicated character-class check into a shared `api.models.is_safe_session_id` helper with regression coverage at every call site. (#3023, #3024)
+- Plain-text `webui_prefill_messages_script` output is now wrapped as a `user` prefill message instead of a `system` message, so dynamic recall context from notes/Obsidian/Joplin scripts becomes ordinary turn context rather than an extra system instruction. The JSON message-list escape hatch is unchanged: scripts that emit explicit `[{"role": "system", "content": "..."}]` still produce a system message. Avoids provider-specific multi-system-message footguns (Anthropic concatenation, OpenAI Responses-API divergence). (#3009)
+
+## [v0.51.148] — 2026-05-28 — Release DT (stage-batch30 — single-PR Insights skill-usage reader)
+
+### Added
+
+- Insights page now shows a Skill Usage card after the LLM Wiki card, displaying per-skill cumulative invocation counts (uses / views / patches / share-%) from the agent-owned `.usage.json`. WebUI reads only; the agent (`tools/skills_tool.py`, `tools/skill_manager_tool.py`) is the single writer with `fcntl` locking, so there is no double-counting or write race. Empty-state shows when no skills have been used yet. Includes i18n keys for the 12 new strings across all supported locales. (#3008)
+
+## [v0.51.147] — 2026-05-28 — Release DS (stage-batch29 — single-PR streaming ownership-cleanup follow-up)
+
+### Fixed
+
+- Settled stream cleanup helpers (`_restoreSettledSession`, `_handleStreamError`, `_deferStreamErrorIfPageHidden`, `_reattachOrRestoreAfterDeferredStreamError`) now thread the owning `EventSource` instance through every async deferred path, so a late error or settle callback from an older source can no longer tear down a newer reconnect source. Completes the ownership-aware cleanup pattern introduced by `closeLiveStream(sessionId, streamId, source)`. (#2930, #3010)
+
+## [v0.51.146] — 2026-05-28 — Release DR (stage-batch28 — 6-PR low-risk safety+contrast batch)
+
+### Fixed
+
+- Dark-mode panel header save buttons now use a theme-aware foreground token, keeping workspace and other detail-pane check icons visible on the default gold accent. (#2998, #3022)
+- Custom provider `/v1/models` discovery now uses a short per-endpoint timeout and gracefully skips slow or unreachable providers, reducing cold `/api/models` cache rebuild latency. (#3024, #3025)
+- Messaging (Telegram-resumed) sessions: the `?messages=0` metadata fast path now routes through the same display merge as the full-message path, so `message_count` and `last_message_at` match the rendered transcript and stop triggering refresh-loops that reset scroll and close open dropdowns. (#3003)
+- WebUI sessions mirrored into `state.db` for long-history retention now stay in the WebUI sidebar tab instead of being misclassified as CLI rows. Adds regression coverage for both directions of the WebUI vs CLI source-tab invariant. (#3027)
+- Sidebar projection now keeps at least one messageful representative visible per non-background conversation when normal filters would otherwise hide every row, rescuing discoverability for sessions with stale snapshot/lineage metadata. Rescued rows are marked `discoverability_warning: rescued_messageful_hidden_session` for auditability; intentional background/cron sessions stay hidden. (#3028)
+
+### Added
+
+- New read-only `api.session_discoverability` audit module cross-checks JSON sidecars, `_index.json`, `state.db`, and the live sidebar response to classify messageful sessions without a visible representative, stale WebUI-as-CLI source flags, missing sidecars, and lineage segments without a visible tip. Diagnostic surface only; does not repair, restart, or mutate any state. (#3029)
+
 ## [v0.51.145] — 2026-05-26 — Release DQ (stage-batch27 — sidebar running-state preservation)
 
 ### Fixed
