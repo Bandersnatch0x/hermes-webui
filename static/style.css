@@ -4417,7 +4417,7 @@ main.main.showing-insights > #mainInsights{display:flex;overflow-y:auto;}
 }
 /* Password input with visibility toggle */
 .password-input-wrap{
-  position:relative;display:flex;align-items:center;
+  position:relative;display:flex;align-items:center;width:100%;
 }
 .password-input-wrap input[type="password"],
 .password-input-wrap input[type="text"]{
